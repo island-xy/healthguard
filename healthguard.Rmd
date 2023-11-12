@@ -1,0 +1,185 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+library(NHANES)
+library(nhanesA)
+library(glmnet)
+library(randomForest)
+library(ggplot2)
+```
+
+
+
+## 17.1.a
+```{r, echo = FALSE}
+HBV <- nhanes('HEQ_I')
+
+HBAnti <- nhanes('HEPBD_H')
+
+HBSAnti <- nhanes('HEPB_S_H')
+
+Dem <- nhanes('DEMO_H')
+```
+
+```{r}
+demo_data=Dem[,c(1,13,17)]
+demo_data$DMDBORN4[demo_data$DMDBORN4==77|demo_data$DMDBORN4==99]=2
+demo_data$DMDEDUC2[demo_data$DMDEDUC2==7|demo_data$DMDEDUC2==9]=1
+```
+
+```{r}
+label_HBV=HBAnti[!is.na(HBAnti$LBXHBC),][,1:2]
+#1 	Positive 		
+#2 	Negative
+```
+
+```{r}
+#Alcohol Use (ALQ_H)
+ALQ_H=nhanes("ALQ_H")
+#days drink alcohol per wk, mo, yr
+drinking_frequency=ALQ_H[,c("SEQN","ALQ120U")]
+
+
+#Drug Use	DUQ_H
+DUQ_H=nhanes("DUQ_H")
+#Ever used marijuana or hashish
+#1 	Yes	
+#2 	No
+drug=DUQ_H[,c("SEQN","DUQ200")]
+drug$DUQ200[drug$DUQ200==7 |drug$DUQ200==9]=1
+
+#Food Security	FSQ_H
+FSQ_H=nhanes("FSQ_H")
+#Worried run out of food
+out_food=FSQ_H[,c("SEQN","FSD032A")]
+out_food$FSD032A[out_food$FSD032A==7|out_food$FSD032A==9|out_food$FSD032A==1|out_food$FSD032A==2]=1
+
+#Health Insurance	HIQ_H
+HIQ_H=nhanes("HIQ_H")
+#Covered by health insurance
+#1 	Yes 
+#2 	No
+Health_Insurance=HIQ_H[,c("SEQN","HIQ011")]
+Health_Insurance$HIQ011[Health_Insurance$HIQ011==7|Health_Insurance$HIQ011==9]=2
+
+#Immunization	IMQ_H
+IMQ_H=nhanes("IMQ_H")
+#Received Hepatitis B 3 dose series
+#1 	Yes at least 3 doses 		
+#2 	Less than 3 doses 	
+HBV_vaccine=IMQ_H[,c("SEQN","IMQ020")]
+HBV_vaccine$IMQ020[HBV_vaccine$IMQ020==7|HBV_vaccine$IMQ020==9|HBV_vaccine$IMQ020==3]=2
+
+#Smoking - Cigarette Use	SMQ_H
+SMQ_H=nhanes("SMQ_H")
+#Smoked at least 100 cigarettes in life(can't use waking smoke because of too many NAs)
+#1 	Yes 	
+#2 	No
+cigarettes_100=SMQ_H[,c("SEQN","SMQ020")]
+cigarettes_100$SMQ020[cigarettes_100$SMQ020==9]=1
+
+#Current Health Status 
+HSQ_H=nhanes("HSQ_H")
+#general health
+general_health=HSQ_H[,c("SEQN","HSD010")]
+general_health$HSD010[general_health$HSD010==9|general_health$HSD010==5|general_health$HSD010==-1]=4
+general_health$HSD010[general_health$HSD010==1|general_health$HSD010==2]=3
+#Housing Characteristics
+HOQ_H=nhanes("HOQ_H")
+#Home owned, bought, rented, other
+#1 	Owned or being bought 
+#2 	Rented
+home_type=HOQ_H[,c("SEQN","HOQ065")]
+home_type$HOQ065[home_type$HOQ065==7|home_type$HOQ065==9|home_type$HOQ065==3]=2
+```
+
+```{r}
+var_list=c("drinking_frequency","drug","out_food","Health_Insurance","HBV_vaccine","cigarettes_100","general_health","home_type")
+HBV_data=label_HBV
+for (i in var_list){
+  eval(parse(text = paste0("HBV_data=merge(HBV_data,",i,",by='SEQN',all=FALSE)")))
+}
+```
+
+
+
+```{r}
+HBV_data=(HBV_data[,-1])
+HBV_data_clean <- na.omit(HBV_data)
+#HBV_data_factor=as.data.frame(lapply(HBV_data, as.factor))
+#HBV_data_factor <- cbind(HBV_data_factor[,1],model.matrix(~., data = HBV_data_factor[,-1])[,-1])
+
+
+HBV_data_clean[,1]=HBV_data_clean[,1]-1
+```
+
+
+
+```{r}
+set.seed(123)
+train_indices <- sample(1:nrow(HBV_data_clean), 0.7 * nrow(HBV_data_clean))
+train_data <- HBV_data_clean[train_indices, ]
+test_data <- HBV_data_clean[-train_indices, ]
+
+
+x_train <- as.matrix(train_data[, -1])
+y_train <- factor(train_data[,1])
+x_test <- as.matrix(test_data[, -1])
+y_test <- factor(test_data[,1])
+
+
+```
+
+```{r}
+set.seed(123)
+lasso_model <- cv.glmnet(x_train, y_train, alpha = 1,family = "binomial")
+lasso_model$lambda.min
+lasso_model_fin <- glmnet(x_train, y_train, family = "binomial", alpha = 1, lambda = 0.005)
+coef(lasso_model_fin)
+```
+
+#lasso:Alcohol Use (ALQ_H)/Drug Use	DUQ_H/Health Insurance	HIQ_H/Smoking - Cigarette Use	SMQ_H
+
+```{r}
+set.seed(2024)
+HBV_data_clean$LBXHBC=factor(HBV_data_clean$LBXHBC)
+rf_model=randomForest(LBXHBC ~ ., data = HBV_data_clean)
+importance(rf_model)>median(importance(rf_model))
+data_sig=data.frame(factor= rownames(importance(rf_model)),MeanDecreaseGini=importance(rf_model))
+ggplot(data_sig,aes(x=factor,y=MeanDecreaseGini))+geom_bar(stat = "identity", fill = "steelblue", width = 0.7)+labs(title = "feature importance (random forest)", x = "factors", y = "MeanDecreaseGini")
+
+```
+#random forest:Alcohol Use (ALQ_H)/Food Security	FSQ_H/Health Insurance	HIQ_H/Immunization	IMQ_H
+
+```{r}
+#We use the significant feature that at least one method used
+#logistics
+HBV_data_shrink=HBV_data_clean[,-c(8,9)]
+logis_model=glm(LBXHBC~.,data=HBV_data_shrink,family = binomial)
+summary(logis_model)
+```
+We finally use the logistics model to indicate that Drug Use(DUQ_H), Health Insurance	(HIQ_H)/Smoking - Cigarette Use	(SMQ_H) are the most significant features.
+
+
+
+#0 	Positive 		
+#1 	Negative
+
+#Drug Use	DUQ_H
+#Ever used marijuana or hashish
+#1 	Yes	
+#2 	No
+
+#Health Insurance	HIQ_H
+#Covered by health insurance
+#1 	Yes 
+#2 	No
+
+#Smoking - Cigarette Use	SMQ_H
+#Smoked at least 100 cigarettes in life(can't use waking smoke because of too many NAs)
+#1 	Yes 	
+#2 	No
